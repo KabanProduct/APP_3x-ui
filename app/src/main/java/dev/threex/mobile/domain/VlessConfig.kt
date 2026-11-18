@@ -29,7 +29,7 @@ class VlessLink(val host: String, val port: Int, val uuid: String, val name: Str
             require(options["encryption"].orEmpty() in listOf("", "none")) { "Этот вариант VLESS encryption ещё не поддерживается" }
             require(options["allowInsecure"].orEmpty() !in listOf("1", "true")) { "Отключение проверки TLS не поддерживается" }
             val flow = options["flow"].orEmpty()
-            require(flow in listOf("", "xtls-rprx-vision")) { "Неизвестный flow" }
+            require(flow in listOf("", "xtls-rprx-vision", "xtls-rprx-vision-udp443")) { "Неизвестный flow" }
             require(transport != "xhttp" || flow.isEmpty()) { "XHTTP не использует Vision flow" }
             require(options["headerType"].orEmpty() in listOf("", "none")) { "TCP HTTP header не поддерживается" }
             if (security == "reality") {

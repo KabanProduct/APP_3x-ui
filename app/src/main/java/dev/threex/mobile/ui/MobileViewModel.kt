@@ -26,6 +26,10 @@ data class MobileState(
     val hostTrust: HostTrustRequired? = null,
     val editor: JSONObject? = null,
     val canRecoverInstall: Boolean = false,
+    val realityCandidates: List<RealityCandidate> = emptyList(),
+    val realityLoading: Boolean = false,
+    val realityLoaded: Boolean = false,
+    val realityError: String? = null,
 )
 
 class MobileViewModel(application: Application) : AndroidViewModel(application) {
@@ -74,17 +78,17 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
         val snapshot = candidate.snapshot()
         withContext(Dispatchers.IO) { store.saveServer(profile) }
         api = candidate
-        mutable.value = mutable.value.copy(activeServer = profile, snapshot = snapshot)
+        mutable.value = mutable.value.copy(activeServer = profile, snapshot = snapshot, realityCandidates = emptyList(), realityLoaded = false, realityLoading = false, realityError = null)
         reloadStored()
     }
     fun disconnectPanel() {
         if (mutable.value.busy) return
         api = null
-        mutable.value = mutable.value.copy(activeServer = null, snapshot = null)
+        mutable.value = mutable.value.copy(activeServer = null, snapshot = null, realityCandidates = emptyList(), realityLoading = false, realityLoaded = false, realityError = null)
     }
     fun forgetServer(profile: ServerProfile) = run("Удаление сохранённого сервера") {
         withContext(Dispatchers.IO) { store.removeServer(profile.id) }
-        if (mutable.value.activeServer?.id == profile.id) { api = null; mutable.value = mutable.value.copy(activeServer = null, snapshot = null) }
+        if (mutable.value.activeServer?.id == profile.id) { api = null; mutable.value = mutable.value.copy(activeServer = null, snapshot = null, realityCandidates = emptyList(), realityLoading = false, realityLoaded = false, realityError = null) }
         reloadStored()
     }
     fun refresh() = run("Обновление панели") { refreshInternal() }
@@ -108,13 +112,36 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
         val links = requireApi().links(email)
         mutable.value = mutable.value.copy(links = links, message = if (links.isEmpty()) "У клиента пока нет ссылок" else null)
     }
-    fun addClient(email: String, inboundId: Int, limit: Long, days: Int) = run("Создание клиента") {
-        val inbound = mutable.value.snapshot?.inbounds?.firstOrNull { it.optInt("id") == inboundId } ?: error("Выберите подключение")
-        require(inbound.optString("protocol") == "vless") { "Мастер клиентов поддерживает VLESS" }
-        val stream = inbound.objectField("streamSettings")
-        val flow = if (stream.optString("network") in listOf("tcp", "raw") && stream.optString("security") in listOf("tls", "reality")) "xtls-rprx-vision" else ""
-        val client = PresetBuilder.client(email, flow, limit, days)
-        mutation { it.post("clients", "add", body = JSONObject().put("client", client).put("inboundIds", JSONArray(listOf(inboundId)))) }
+    fun addClient(draft: ClientDraft, onCreated: () -> Unit) = run("Создание клиента") {
+        val payload = draft.payload(mutable.value.snapshot?.inbounds.orEmpty())
+        val email = payload.getJSONObject("client").getString("email")
+        require(mutable.value.snapshot?.clients.orEmpty().none { it.optString("email") == email }) { "Клиент с таким именем уже существует" }
+        var disableFailed = false
+        mutation { api ->
+            api.createClient(payload)
+            // 3.7.0 Create forces enable=true. Disable separately after confirmed creation.
+            if (!draft.enable) try { api.setClientEnabled(email, false) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { disableFailed = true }
+        }
+        if (disableFailed) mutable.value = mutable.value.copy(message = "Клиент создан, но отключить доступ не удалось. Обновите список и отключите клиента; повторять создание не нужно.")
+        onCreated()
+    }
+    fun loadRealityCandidates(force: Boolean = false) {
+        val currentApi = api ?: return
+        if (mutable.value.realityLoading || (!force && mutable.value.realityLoaded)) return
+        mutable.value = mutable.value.copy(realityLoading = true, realityError = null)
+        viewModelScope.launch {
+            try {
+                val candidates = currentApi.realitySuggestions()
+                if (api === currentApi) mutable.value = mutable.value.copy(realityCandidates = candidates, realityLoaded = true,
+                    realityError = if (candidates.isEmpty()) "Сервер не нашёл подходящие домены. Повторите проверку или введите свой target/SNI." else null)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (api === currentApi) mutable.value = mutable.value.copy(realityLoaded = true, realityError =
+                    (e as? PanelException)?.message ?: "Не удалось получить домены от панели. Повторите запрос или заполните поля вручную.")
+            } finally { if (api === currentApi) mutable.value = mutable.value.copy(realityLoading = false) }
+        }
     }
     fun editClientLimits(email: String, limit: Long, days: Int) = run("Изменение лимитов клиента") {
         require(limit in 0..1_000_000 && days in 0..36500) { "Некорректный лимит или срок" }

@@ -11,6 +11,24 @@ import org.junit.Test
 import java.util.concurrent.TimeUnit
 
 class PanelApiTest {
+    @Test fun getsDefaultCandidatesFromServerAndPostsClientAttachments() = runBlocking {
+        server().use { server ->
+            server.enqueue(response("""[{"target":"www.example.com:443","host":"www.example.com","feasible":true}]"""))
+            server.enqueue(response("null"))
+            val api = PanelApi(ServerProfile(name = "test", baseUrl = server.localUrl("/secret/"), token = "test-token"), true)
+            assertEquals("www.example.com", api.realitySuggestions().single().sni)
+            val scan = server.takeRequest(2, TimeUnit.SECONDS)!!
+            assertEquals("/secret/panel/api/server/scanRealityTargets", scan.path)
+            assertEquals("POST", scan.method); assertEquals("targets=", scan.body.readUtf8())
+            val body = JSONObject("""{"client":{"email":"phone","id":"f47ac10b-58cc-4372-a567-0e02b2c3d479","flow":"xtls-rprx-vision"},"inboundIds":[1,2]}""")
+            api.createClient(body)
+            val create = server.takeRequest(2, TimeUnit.SECONDS)!!
+            assertEquals("/secret/panel/api/clients/add", create.path)
+            val sent = JSONObject(create.body.readUtf8())
+            assertEquals(2, sent.getJSONArray("inboundIds").length())
+            assertEquals("xtls-rprx-vision", sent.getJSONObject("client").getString("flow"))
+        }
+    }
     private fun server() = MockWebServer().apply { start(java.net.InetAddress.getByName("127.0.0.1"), 0) }
     private fun MockWebServer.localUrl(path: String) = url(path).newBuilder().host("127.0.0.1").build().toString()
     private fun response(obj: String) = MockResponse().setHeader("Content-Type", "application/json").setBody("{\"success\":true,\"obj\":$obj}")

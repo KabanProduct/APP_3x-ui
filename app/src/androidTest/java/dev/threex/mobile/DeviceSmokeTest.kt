@@ -21,10 +21,44 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
+import dev.threex.mobile.data.PanelSnapshot
+import dev.threex.mobile.domain.ClientDraft
+import dev.threex.mobile.ui.CreateClientDialog
+import dev.threex.mobile.ui.MobileState
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class DeviceSmokeTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Test fun clientFormShowsFieldsAndSubmitsSelectedInbound() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val submitted = AtomicReference<ClientDraft>()
+        val inbound = JSONObject().put("id", 7).put("protocol", "vless").put("remark", "Test inbound").put("port", 443).put("enable", true)
+            .put("streamSettings", JSONObject().put("network", "tcp").put("security", "reality"))
+        val state = MobileState(snapshot = PanelSnapshot(JSONObject().put("panelVersion", "3.7.0"), listOf(inbound), emptyList()))
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme { CreateClientDialog(state, {}, { submitted.set(it) }) }
+            } }
+            assertTrue(device.wait(Until.hasObject(By.text("Новый клиент VLESS")), 10_000))
+            val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)
+            assertNotNull("Client fields must be visible", field)
+            field.text = "device-client"
+            device.pressBack()
+            device.findObject(By.textContains("Test inbound")).click()
+            assertTrue(device.hasObject(By.text("Flow")))
+            device.findObject(By.text("xtls-rprx-vision")).click()
+            device.findObject(By.text("Создать клиента")).click()
+            device.waitForIdle()
+            assertNotNull("Form did not submit", submitted.get())
+            assertEquals("device-client", submitted.get().email)
+            assertEquals(setOf(7), submitted.get().inboundIds)
+            assertEquals("xtls-rprx-vision", submitted.get().flow)
+        }
+    }
 
     @Test fun keystoreVaultRoundTripDoesNotStorePlaintext() {
         val store = SecureStore(context)

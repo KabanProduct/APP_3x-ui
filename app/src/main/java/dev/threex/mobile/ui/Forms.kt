@@ -76,11 +76,18 @@ import org.json.JSONObject
         error?.let { Text(it) }
     }
 }
-@Composable internal fun QuickSetupForm(state: MobileState, submit: (QuickSetup) -> Unit) {
+@Composable internal fun QuickSetupForm(state: MobileState, loadCandidates: (Boolean) -> Unit, submit: (QuickSetup) -> Unit) {
     var preset by rememberSaveable { mutableStateOf(ConnectionPreset.REALITY_VISION) }
     var name by rememberSaveable { mutableStateOf("Мой VLESS") }; var client by rememberSaveable { mutableStateOf("phone") }
-    var host by rememberSaveable { mutableStateOf("") }; var port by rememberSaveable { mutableStateOf("443") }
-    var sni by rememberSaveable { mutableStateOf("") }; var target by rememberSaveable { mutableStateOf("") }
+    var host by rememberSaveable(state.activeServer?.id, state.activeServer?.baseUrl) { mutableStateOf(suggestedPublicHost(state.activeServer?.baseUrl)) }; var port by rememberSaveable { mutableStateOf("443") }
+    var sni by rememberSaveable(state.activeServer?.id, preset) { mutableStateOf("") }; var target by rememberSaveable(state.activeServer?.id, preset) { mutableStateOf("") }
+    val candidates = if (state.activeServer != null) state.realityCandidates else emptyList()
+    LaunchedEffect(state.activeServer?.id, preset) {
+        if (state.activeServer != null && preset != ConnectionPreset.XHTTP_TLS) loadCandidates(false)
+    }
+    LaunchedEffect(candidates, preset) {
+        if (preset != ConnectionPreset.XHTTP_TLS && sni.isBlank() && target.isBlank()) candidates.randomOrNull()?.let { sni = it.sni; target = it.target }
+    }
     var cert by rememberSaveable { mutableStateOf("") }; var key by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     Text("Сервер: ${state.activeServer?.name ?: "сначала войдите во вкладке «Панель»"}")
@@ -88,12 +95,26 @@ import org.json.JSONObject
     Text(preset.description)
     Field("Имя подключения", name, { name = it }); Field("Имя клиента", client, { client = it })
     Field("Публичный IP или домен VPS", host, { host = it }); Field("Порт подключения", port, { port = it }, numeric = true)
+    Text("Адрес взят из подключения к панели. Если VPN использует другой адрес, измените его.", style = MaterialTheme.typography.bodySmall)
     Field("SNI", sni, { sni = it })
     if (preset == ConnectionPreset.XHTTP_TLS) {
         Field("Путь сертификата на VPS", cert, { cert = it }); Field("Путь приватного ключа на VPS", key, { key = it })
         Text("Домен должен указывать на VPS. Сертификат и его продление настраиваются отдельно; мастер создаёт inbound.")
     } else {
         Field("REALITY target · domain:443", target, { target = it })
+        if (state.realityLoading) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("Сервер проверяет REALITY-домены…") }
+        state.realityError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        var expanded by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(enabled = candidates.isNotEmpty(), onClick = { expanded = true }) { Text("Выбрать домен с сервера (${candidates.size})") }
+            DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                candidates.forEach { candidate -> DropdownMenuItem(text = { Text("${candidate.target} · ${candidate.latencyMs} мс") }, onClick = { sni = candidate.sni; target = candidate.target; expanded = false }) }
+            }
+        }
+        Actions {
+            TextButton(enabled = candidates.isNotEmpty(), onClick = { (candidates.filter { it.target != target }.ifEmpty { candidates }).randomOrNull()?.let { sni = it.sni; target = it.target } }) { Text("Случайный домен") }
+            TextButton(enabled = state.activeServer != null && !state.realityLoading, onClick = { loadCandidates(true) }) { Text("Проверить заново") }
+        }
         Text("Панель проверит пригодность target со стороны VPS. Единого домена, работающего во всех сетях, нет.")
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }

@@ -121,7 +121,7 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
                                 }
                             }
                             SectionTitle("Клиенты")
-                            Button(enabled = !state.busy && snapshot.canWrite && snapshot.inbounds.any { it.optString("protocol") == "vless" }, onClick = { newClient = true }) { Text("Создать клиента") }
+                            Button(enabled = !state.busy && snapshot.canWrite && snapshot.inbounds.any { it.optString("protocol") == "vless" }, onClick = { vm.clearMessage(); newClient = true }) { Text("Создать клиента") }
                             snapshot.clients.forEach { client ->
                                 val email = client.getString("email")
                                 AppCard(email) {
@@ -141,7 +141,7 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
                         }
                         if (state.servers.isEmpty()) Text("Укажите полный HTTPS-адрес панели, включая секретный путь. Если панель не установлена, откройте вкладку VPS.")
                     }
-                    2 -> QuickSetupForm(state) { input -> confirmation = "Создать ${input.preset.title} на ${input.publicHost}:${input.port} и клиента «${input.clientName}»?" to { vm.quickSetup(input) } }
+                    2 -> QuickSetupForm(state, vm::loadRealityCandidates) { input -> confirmation = "Создать ${input.preset.title} на ${input.publicHost}:${input.port} и клиента «${input.clientName}»?" to { vm.quickSetup(input) } }
                     3 -> SshForm(state, vm) { host, port -> confirmation = "Установить 3x-ui 3.7.0 на проверенный VPS? Будут добавлены пакеты curl, tar, OpenSSL, служба x-ui, SQLite и HTTPS-панель на порту $port. Сертификат на 365 дней будет закреплён через SSH. Firewall автоматически не меняется." to { vm.install(host, port) } }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -149,9 +149,10 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
         }
         if (serverForm) ServerDialog(selectedServer, state.busy, { serverForm = false }) { profile, otp -> vm.connect(profile, otp); serverForm = false }
         if (vpnImport) ImportDialog({ vpnImport = false }) { vm.importVpn(it); vpnImport = false }
-        if (newClient || editClient != null) ClientDialog(state, editClient, { newClient = false; editClient = null }) { email, inbound, limit, days ->
-            if (editClient == null) vm.addClient(email, inbound, limit, days) else vm.editClientLimits(email, limit, days)
-            newClient = false; editClient = null
+        if (newClient) CreateClientDialog(state, { newClient = false }) { draft -> vm.addClient(draft) { newClient = false } }
+        if (editClient != null) ClientDialog(state, editClient, { editClient = null }) { email, _, limit, days ->
+            vm.editClientLimits(email, limit, days)
+            editClient = null
         }
         state.hostTrust?.let { offered ->
             AlertDialog(onDismissRequest = vm::dismissTrust, title = { Text(if (offered.changed) "SSH-ключ изменился" else "Первое подключение по SSH") },

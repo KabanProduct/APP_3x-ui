@@ -31,7 +31,7 @@ class PanelApi(private val profile: ServerProfile, allowLocalHttp: Boolean = fal
     private val cookies = mutableListOf<Cookie>()
     private var csrf = ""
     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
-        .retryOnConnectionFailure(false).connectTimeout(15, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false).connectTimeout(15, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS)
         .apply {
             if (profile.certificatePin.isNotEmpty()) {
                 val trust = object : X509TrustManager {
@@ -105,6 +105,12 @@ class PanelApi(private val profile: ServerProfile, allowLocalHttp: Boolean = fal
         val links = get("clients", "links", email) as? JSONArray ?: JSONArray()
         return (0 until links.length()).map { links.getString(it) }
     }
+    suspend fun realitySuggestions(): List<dev.threex.mobile.domain.RealityCandidate> {
+        val results = form("server", "scanRealityTargets", values = mapOf("targets" to "")) as? JSONArray
+            ?: throw PanelException("Панель вернула неизвестный формат списка REALITY-доменов")
+        return dev.threex.mobile.domain.realityCandidates(results)
+    }
+    suspend fun createClient(payload: JSONObject) = post("clients", "add", body = payload)
     suspend fun setClientEnabled(email: String, enabled: Boolean) = post("clients", if (enabled) "bulkEnable" else "bulkDisable", body = JSONObject().put("emails", JSONArray(listOf(email))))
     suspend fun setInboundEnabled(id: Int, enabled: Boolean) = post("inbounds", "setEnable", id.toString(), body = JSONObject().put("enable", enabled))
 }

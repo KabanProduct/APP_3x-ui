@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -22,6 +22,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       - name: Install Android SDK packages
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Fetch verified Xray library
@@ -38,7 +39,7 @@ jobs:
   release:
     needs: checks
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
@@ -54,6 +55,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        if: steps.version.outputs.publish == 'true'
       - name: Build signed release
         if: steps.version.outputs.publish == 'true'
         env:

@@ -20,7 +20,7 @@ data class ClientDraft(
     val trafficReset: String = "never", val trafficResetDay: String = "1",
     val tgId: String = "0", val group: String = "", val comment: String = "", val reverseTag: String = "",
 ) {
-    fun payload(inbounds: List<JSONObject>, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): JSONObject {
+    fun payload(inbounds: List<JSONObject>, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault(), existingExpiry: Long? = null, preserveFlow: Boolean = false): JSONObject {
         fun identifier(value: String, label: String): String {
             val clean = value.trim()
             require(clean.isNotEmpty() && clean.none { it.isWhitespace() || it.isISOControl() || it in "/\\" }) { "$label: недопустимое имя" }
@@ -30,15 +30,18 @@ data class ClientDraft(
             value.toIntOrNull()?.takeIf { it in 0..max } ?: throw IllegalArgumentException("$label: введите число от 0 до $max")
         val name = identifier(email, "Имя клиента")
         require(Regex("[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}").matches(uuid)) { "Введите корректный UUID" }
-        require(inboundIds.isNotEmpty()) { "Выберите хотя бы одно входящее подключение" }
+        require(inboundIds.isNotEmpty() || existingExpiry != null) { "Выберите хотя бы одно входящее подключение" }
         val selected = inboundIds.map { id -> inbounds.firstOrNull { it.optInt("id") == id } ?: error("Входящее $id больше недоступно") }
         require(selected.all { it.optString("protocol") == "vless" }) { "Эта форма создаёт клиентов VLESS" }
-        require(flow in listOf("", "xtls-rprx-vision", "xtls-rprx-vision-udp443")) { "Неизвестный Flow" }
-        require(flow.isEmpty() || selected.all(::supportsClientFlow)) { "Выбранный Flow несовместим с частью входящих. Выберите «Без Flow» или измените привязки." }
+        if (!preserveFlow) {
+            require(flow in listOf("", "xtls-rprx-vision", "xtls-rprx-vision-udp443")) { "Неизвестный Flow" }
+            require(flow.isEmpty() || selected.all(::supportsClientFlow)) { "Выбранный Flow несовместим с частью входящих. Выберите «Без Flow» или измените привязки." }
+        }
         val gib = limitGiB.replace(',', '.').toBigDecimalOrNull()
         require(gib != null && gib >= BigDecimal.ZERO && gib <= BigDecimal("1000000")) { "Лимит трафика: от 0 до 1000000 ГиБ" }
         val bytes = try { gib.multiply(BigDecimal(1073741824L)).longValueExact() } catch (_: ArithmeticException) { throw IllegalArgumentException("Лимит трафика содержит слишком много дробных знаков") }
         val expiry = when (expiryMode) {
+            "keep" -> existingExpiry ?: error("Нет исходного срока действия")
             "never" -> 0L
             "days", "delayed" -> {
                 val count = number(days, "Срок в днях", 36500)

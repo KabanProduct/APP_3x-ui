@@ -33,7 +33,6 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
     var selectedServer by remember { mutableStateOf<ServerProfile?>(null) }
     var vpnImport by remember { mutableStateOf(false) }
     var newClient by remember { mutableStateOf(false) }
-    var editClient by remember { mutableStateOf<JSONObject?>(null) }
     var confirmation by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var pendingVpn by rememberSaveable { mutableStateOf<String?>(null) }
     val context = LocalContext.current
@@ -133,9 +132,11 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
                                     Actions {
                                         TextButton(enabled = !state.busy, onClick = { vm.clientLinks(email) }) { Text("Ссылки / QR") }
                                         TextButton(enabled = !state.busy && snapshot.canWrite, onClick = { vm.toggleClient(email, !client.optBoolean("enable")) }) { Text(if (client.optBoolean("enable")) "Отключить" else "Включить") }
-                                        TextButton(enabled = !state.busy && snapshot.canWrite && client.optString("uuid").isNotBlank(), onClick = { editClient = client }) { Text("Лимиты") }
-                                        TextButton(enabled = !state.busy && snapshot.canWrite, onClick = { confirmation = "Удалить клиента «$email» из всех подключений?" to { vm.deleteClient(email) } }) { Text("Удалить") }
+
+
                                     }
+                                    OutlinedButton(enabled = !state.busy && snapshot.canWrite && client.optString("uuid").isNotBlank(), onClick = { vm.openClientEditor(email) }) { Text("Настройки клиента") }
+                                    TextButton(enabled = !state.busy && snapshot.canWrite, onClick = { confirmation = "Удалить клиента «$email» из всех входящих? Его доступ будет прекращён." to { vm.deleteClient(email) } }) { Text("Удалить клиента", color = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
@@ -150,9 +151,12 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
         if (serverForm) ServerDialog(selectedServer, state.busy, { serverForm = false }) { profile, otp -> vm.connect(profile, otp); serverForm = false }
         if (vpnImport) ImportDialog({ vpnImport = false }) { vm.importVpn(it); vpnImport = false }
         if (newClient) CreateClientDialog(state, { newClient = false }) { draft -> vm.addClient(draft) { newClient = false } }
-        if (editClient != null) ClientDialog(state, editClient, { editClient = null }) { email, _, limit, days ->
-            vm.editClientLimits(email, limit, days)
-            editClient = null
+        state.clientEditorEmail?.let { email ->
+            val edit = state.clientEditor
+            if (edit == null) EditorLoadingDialog("Настройки клиента", state.busy, state.message, vm::closeClientEditor) { vm.openClientEditor(email) }
+            else CreateClientDialog(state, vm::closeClientEditor, editing = edit, delete = {
+                confirmation = "Удалить клиента «${edit.email}» из всех входящих? Его доступ будет прекращён." to { vm.deleteClient(edit.email) }
+            }, submit = vm::saveClient)
         }
         state.hostTrust?.let { offered ->
             AlertDialog(onDismissRequest = vm::dismissTrust, title = { Text(if (offered.changed) "SSH-ключ изменился" else "Первое подключение по SSH") },
@@ -161,7 +165,11 @@ fun MobileApp(vm: MobileViewModel = viewModel()) {
         }
         confirmation?.let { (text, action) -> AlertDialog(onDismissRequest = { confirmation = null }, title = { Text("Подтвердите действие") }, text = { Text(text) },
             confirmButton = { TextButton(onClick = { confirmation = null; action() }) { Text("Продолжить") } }, dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Отмена") } }) }
-        state.editor?.let { JsonDialog(it, state.busy, vm::closeEditor, vm::saveInbound) }
+        state.inboundEditorId?.let { id ->
+            val inbound = state.editor
+            if (inbound == null) EditorLoadingDialog("Настройки подключения", state.busy, state.message, vm::closeEditor) { vm.openInboundEditor(id) }
+            else InboundEditorDialog(inbound, state.busy, state.message, vm::closeEditor, vm::saveInbound)
+        }
         if (state.links.isNotEmpty()) LinksDialog(state.links, state.busy, vm::clearLinks, vm::importVpn)
     }
 }

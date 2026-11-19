@@ -27,11 +27,39 @@ import dev.threex.mobile.data.PanelSnapshot
 import dev.threex.mobile.domain.ClientDraft
 import dev.threex.mobile.ui.CreateClientDialog
 import dev.threex.mobile.ui.MobileState
+import dev.threex.mobile.ui.InboundEditorDialog
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class DeviceSmokeTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Test fun inboundEditorOpensLargeConfigurationAndPreservesUnknownFields() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val saved = AtomicReference<String>()
+        val config = JSONObject().put("id", 7).put("remark", "Test inbound")
+            .put("futureField", JSONObject().put("preserve", true))
+            .put("settings", JSONObject().put("clients", JSONArray((1..200).map { JSONObject().put("email", "test-$it") })))
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity -> activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE); activity.setContent {
+                MaterialTheme { InboundEditorDialog(config, false, null, {}, { id, source -> assertEquals(7, id); saved.set(source) }) }
+            } }
+            assertTrue(device.wait(Until.hasObject(By.text("Настройки подключения")), 10_000))
+            assertTrue(device.hasObject(By.clazz("android.widget.EditText")))
+            device.findObject(By.text("Сохранить")).click()
+            device.waitForIdle()
+            val deadline = System.currentTimeMillis() + 5_000
+            while (saved.get() == null && System.currentTimeMillis() < deadline) Thread.sleep(50)
+            if (saved.get() == null) {
+                device.dumpWindowHierarchy(File(context.getExternalFilesDir(null), "inbound-editor.xml"))
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "inbound-editor.png"))
+            }
+            assertNotNull("Save did not reach the callback", saved.get())
+            val result = JSONObject(saved.get())
+            assertEquals(200, result.getJSONObject("settings").getJSONArray("clients").length())
+            assertTrue(result.getJSONObject("futureField").getBoolean("preserve"))
+        }
+    }
 
     @Test fun clientFormShowsFieldsAndSubmitsSelectedInbound() {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -41,7 +69,7 @@ class DeviceSmokeTest {
         val state = MobileState(snapshot = PanelSnapshot(JSONObject().put("panelVersion", "3.7.0"), listOf(inbound), emptyList()))
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity -> activity.setContent {
-                MaterialTheme { CreateClientDialog(state, {}, { submitted.set(it) }) }
+                MaterialTheme { CreateClientDialog(state, {}, submit = { submitted.set(it) }) }
             } }
             assertTrue(device.wait(Until.hasObject(By.text("Новый клиент VLESS")), 10_000))
             val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)

@@ -25,6 +25,9 @@ data class MobileState(
     val inspection: InspectionReport? = null,
     val hostTrust: HostTrustRequired? = null,
     val editor: JSONObject? = null,
+    val inboundEditorId: Int? = null,
+    val clientEditorEmail: String? = null,
+    val clientEditor: ClientEdit? = null,
     val canRecoverInstall: Boolean = false,
     val realityCandidates: List<RealityCandidate> = emptyList(),
     val realityLoading: Boolean = false,
@@ -67,7 +70,8 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun clearMessage() { mutable.value = mutable.value.copy(message = null) }
     fun clearLinks() { mutable.value = mutable.value.copy(links = emptyList()) }
-    fun closeEditor() { mutable.value = mutable.value.copy(editor = null) }
+    fun closeEditor() { if (!mutable.value.busy) mutable.value = mutable.value.copy(editor = null, inboundEditorId = null, message = null) }
+    fun closeClientEditor() { if (!mutable.value.busy) mutable.value = mutable.value.copy(clientEditor = null, clientEditorEmail = null, message = null) }
     fun dismissTrust() { mutable.value = mutable.value.copy(hostTrust = null) }
     fun connect(profile: ServerProfile, otp: String) = run("Вход в панель и загрузка данных") {
         panelBaseUrl(profile.baseUrl)
@@ -107,7 +111,10 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleInbound(id: Int, enabled: Boolean) = run("Изменение подключения") { mutation { it.setInboundEnabled(id, enabled) } }
     fun deleteInbound(id: Int) = run("Удаление подключения") { mutation { it.post("inbounds", "del", id.toString()) } }
     fun toggleClient(email: String, enabled: Boolean) = run("Изменение доступа клиента") { mutation { it.setClientEnabled(email, enabled) } }
-    fun deleteClient(email: String) = run("Удаление клиента") { mutation { it.post("clients", "del", email) } }
+    fun deleteClient(email: String) = run("Удаление клиента") {
+        mutation { it.deleteClient(email) }
+        if (mutable.value.clientEditorEmail == email) mutable.value = mutable.value.copy(clientEditor = null, clientEditorEmail = null)
+    }
     fun clientLinks(email: String) = run("Получение ссылок") {
         val links = requireApi().links(email)
         mutable.value = mutable.value.copy(links = links, message = if (links.isEmpty()) "У клиента пока нет ссылок" else null)
@@ -143,27 +150,34 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
             } finally { if (api === currentApi) mutable.value = mutable.value.copy(realityLoading = false) }
         }
     }
-    fun editClientLimits(email: String, limit: Long, days: Int) = run("Изменение лимитов клиента") {
-        require(limit in 0..1_000_000 && days in 0..36500) { "Некорректный лимит или срок" }
-        mutation {
-            val hydrated = it.get("clients", "get", email) as? JSONObject ?: error("Не удалось получить клиента")
-            val client = JSONObject(hydrated.getJSONObject("client").toString())
-            require(client.optString("uuid").isNotBlank()) { "Редактор лимитов поддерживает клиентов VLESS" }
-            client.put("id", client.getString("uuid"))
-            client.put("totalGB", Math.multiplyExact(limit, 1073741824L))
-            if (days > 0) client.put("expiryTime", System.currentTimeMillis() + days * 86400000L)
-            // Zero days means keep expiry when editing, unlike new-client creation.
-            it.post("clients", "update", email, body = client)
+    fun openClientEditor(email: String) = run("Загрузка настроек клиента") {
+        mutable.value = mutable.value.copy(clientEditorEmail = email, clientEditor = null)
+        val edit = writable().clientForEdit(email)
+        require(edit.initial.inboundIds.all { id -> mutable.value.snapshot?.inbounds.orEmpty().any { it.optInt("id") == id && it.optString("protocol") == "vless" } }) {
+            "Этот редактор поддерживает клиентов, привязанных только к VLESS-входящим"
+        }
+        mutable.value = mutable.value.copy(clientEditor = edit)
+    }
+    fun saveClient(draft: ClientDraft) = run("Сохранение клиента") {
+        val edit = mutable.value.clientEditor ?: error("Сначала загрузите клиента")
+        try {
+            mutation { it.updateClient(edit, draft, mutable.value.snapshot?.inbounds.orEmpty()) }
+            mutable.value = mutable.value.copy(clientEditor = null, clientEditorEmail = null)
+        } catch (e: ClientPartiallySavedException) {
+            mutable.value = mutable.value.copy(clientEditor = null, clientEditorEmail = null)
+            try { refreshInternal() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+            mutable.value = mutable.value.copy(message = e.message)
         }
     }
     fun openInboundEditor(id: Int) = run("Загрузка настроек подключения") {
-        mutable.value = mutable.value.copy(editor = writable().get("inbounds", "get", id.toString()) as? JSONObject ?: error("Неизвестный формат подключения"))
+        mutable.value = mutable.value.copy(inboundEditorId = id, editor = null)
+        mutable.value = mutable.value.copy(editor = writable().inboundForEdit(id))
     }
     fun saveInbound(id: Int, source: String) = run("Сохранение настроек") {
         val inbound = try { JSONObject(source) } catch (_: Exception) { error("Некорректный JSON") }
-        require(inbound.optInt("id") == id) { "Идентификатор подключения изменять нельзя" }
+        require(mutable.value.inboundEditorId == id && inbound.optInt("id") == id) { "Идентификатор подключения изменять нельзя" }
         mutation { it.post("inbounds", "update", id.toString(), body = inbound) }
-        mutable.value = mutable.value.copy(editor = null)
+        mutable.value = mutable.value.copy(editor = null, inboundEditorId = null)
     }
     fun quickSetup(input: QuickSetup) = run("Проверка и создание VLESS") {
         PresetBuilder.validate(input)

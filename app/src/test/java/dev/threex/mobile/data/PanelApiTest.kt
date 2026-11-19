@@ -11,6 +11,54 @@ import org.junit.Test
 import java.util.concurrent.TimeUnit
 
 class PanelApiTest {
+    private fun editableClient() = JSONObject("""{"client":{"id":5,"uuid":"f47ac10b-58cc-4372-a567-0e02b2c3d479","email":"phone","subId":"sub","enable":true,"totalGB":0,"expiryTime":0,"allowedIPs":""},"inboundIds":[1]}""")
+    private fun editableInbounds() = listOf(1, 2).map { JSONObject().put("id", it).put("protocol", "vless") }
+    @Test fun editRenamesThenAttachesBeforeDetachingUsingNewEmail() = runBlocking {
+        server().use { server ->
+            server.enqueue(response(editableClient().toString()))
+            repeat(3) { server.enqueue(response("null")) }
+            val api = PanelApi(ServerProfile(name="test", baseUrl=server.localUrl("/secret/"), token="test"), true)
+            val edit = dev.threex.mobile.domain.ClientEdit.from(editableClient())
+            api.updateClient(edit, edit.initial.copy(email="renamed", inboundIds=setOf(2)), editableInbounds())
+            assertEquals("/secret/panel/api/clients/get/phone", server.takeRequest().path)
+            val update = server.takeRequest()
+            assertEquals("/secret/panel/api/clients/update/phone", update.path)
+            assertEquals("renamed", JSONObject(update.body.readUtf8()).getString("email"))
+            assertEquals("/secret/panel/api/clients/renamed/attach", server.takeRequest().path)
+            assertEquals("/secret/panel/api/clients/renamed/detach", server.takeRequest().path)
+        }
+    }
+    @Test fun attachmentFailureReportsPartialSaveAndDoesNotDetach() = runBlocking {
+        server().use { server ->
+            server.enqueue(response(editableClient().toString())); server.enqueue(response("null"))
+            server.enqueue(MockResponse().setBody("""{"success":false,"msg":"attach failed"}"""))
+            val api = PanelApi(ServerProfile(name="test", baseUrl=server.localUrl("/"), token="test"), true)
+            val edit = dev.threex.mobile.domain.ClientEdit.from(editableClient())
+            try { api.updateClient(edit, edit.initial.copy(inboundIds=setOf(2)), editableInbounds()); fail("Expected partial save") }
+            catch (_: ClientPartiallySavedException) { }
+            assertEquals(3, server.requestCount)
+        }
+    }
+    @Test fun loadsInboundDetailWithNestedSettingsAndDeletesClient() = runBlocking {
+        server().use { server ->
+            server.enqueue(response("""{"id":7,"settings":{"clients":[]},"streamSettings":{"network":"tcp"},"futureField":123}"""))
+            server.enqueue(response("null"))
+            val api = PanelApi(ServerProfile(name="test", baseUrl=server.localUrl("/secret/"), token="test"), true)
+            val inbound = api.inboundForEdit(7)
+            assertEquals(123, inbound.getInt("futureField")); assertEquals("tcp", inbound.getJSONObject("streamSettings").getString("network"))
+            api.deleteClient("phone")
+            assertEquals("/secret/panel/api/inbounds/get/7", server.takeRequest().path)
+            val deletion = server.takeRequest()
+            assertEquals("POST", deletion.method); assertEquals("/secret/panel/api/clients/del/phone", deletion.path)
+        }
+    }
+    @Test fun rejectsMismatchedInboundDetail() = runBlocking {
+        server().use { server ->
+            server.enqueue(response("""{"id":9}"""))
+            val api = PanelApi(ServerProfile(name="test", baseUrl=server.localUrl("/"), token="test"), true)
+            try { api.inboundForEdit(7); fail("Expected id validation") } catch (_: IllegalArgumentException) { }
+        }
+    }
     @Test fun getsDefaultCandidatesFromServerAndPostsClientAttachments() = runBlocking {
         server().use { server ->
             server.enqueue(response("""[{"target":"www.example.com:443","host":"www.example.com","feasible":true}]"""))

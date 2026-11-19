@@ -55,27 +55,6 @@ import org.json.JSONObject
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 }
-@Composable internal fun ClientDialog(state: MobileState, editing: JSONObject?, onDismiss: () -> Unit, submit: (String, Int, Long, Int) -> Unit) {
-    var email by remember { mutableStateOf(editing?.optString("email").orEmpty()) }
-    var limit by remember { mutableStateOf(if (editing == null) "0" else (editing.optLong("totalGB") / 1073741824L).toString()) }
-    var days by remember { mutableStateOf("0") }
-    val inbounds = state.snapshot?.inbounds.orEmpty().filter { it.optString("protocol") == "vless" }
-    var selected by remember { mutableIntStateOf(inbounds.firstOrNull()?.optInt("id") ?: 0) }
-    var error by remember { mutableStateOf<String?>(null) }
-    FormDialog(if (editing == null) "Новый клиент" else "Лимиты клиента", onDismiss, {
-        val l = limit.toLongOrNull(); val d = days.toIntOrNull()
-        if (l == null || d == null || l !in 0..1_000_000 || d !in 0..36500) error = "Введите неотрицательные числовые значения"
-        else submit(email, selected, l, d)
-    }, "Сохранить", !state.busy) {
-        Field("Имя клиента", email, { email = it }, enabled = editing == null)
-        if (editing == null) inbounds.forEach { inbound ->
-            FilterChip(selected == inbound.optInt("id"), onClick = { selected = inbound.optInt("id") }, label = { Text("${inbound.optString("remark")} :${inbound.optInt("port")}") })
-        }
-        Field("Лимит, ГиБ · 0 = без лимита", limit, { limit = it }, numeric = true)
-        Field(if (editing == null) "Срок, дней · 0 = бессрочно" else "Новый срок, дней · 0 = не менять", days, { days = it }, numeric = true)
-        error?.let { Text(it) }
-    }
-}
 @Composable internal fun QuickSetupForm(state: MobileState, loadCandidates: (Boolean) -> Unit, submit: (QuickSetup) -> Unit) {
     var preset by rememberSaveable { mutableStateOf(ConnectionPreset.REALITY_VISION) }
     var name by rememberSaveable { mutableStateOf("Мой VLESS") }; var client by rememberSaveable { mutableStateOf("phone") }
@@ -153,13 +132,6 @@ import org.json.JSONObject
                 is SetupDecision.ReviewRequired -> { Text("Автоматическая установка не предлагается:"); decision.reasons.forEach { Text("• $it") } }
             }
         }
-    }
-}
-@Composable internal fun JsonDialog(inbound: JSONObject, busy: Boolean, dismiss: () -> Unit, save: (Int, String) -> Unit) {
-    var source by remember(inbound) { mutableStateOf(inbound.toString(2)) }
-    FormDialog("Настройки подключения · JSON", dismiss, { save(inbound.getInt("id"), source) }, "Применить", !busy) {
-        Text("Расширенный редактор. Поля сохраняются целиком. Смена транспорта может потребовать выдачи новых ссылок клиентам.")
-        Field("Конфигурация", source, { source = it }, multiline = true)
     }
 }
 @Composable internal fun LinksDialog(links: List<String>, busy: Boolean, dismiss: () -> Unit, import: (String) -> Unit) {

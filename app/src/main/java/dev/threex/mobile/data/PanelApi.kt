@@ -111,9 +111,36 @@ class PanelApi(private val profile: ServerProfile, allowLocalHttp: Boolean = fal
         return dev.threex.mobile.domain.realityCandidates(results)
     }
     suspend fun createClient(payload: JSONObject) = post("clients", "add", body = payload)
+    suspend fun clientForEdit(email: String): dev.threex.mobile.domain.ClientEdit {
+        val response = get("clients", "get", email) as? JSONObject ?: throw PanelException("Неизвестный формат клиента")
+        return dev.threex.mobile.domain.ClientEdit.from(response)
+    }
+    suspend fun deleteClient(email: String) = post("clients", "del", email)
+    suspend fun inboundForEdit(id: Int): JSONObject {
+        val inbound = get("inbounds", "get", id.toString()) as? JSONObject ?: throw PanelException("Неизвестный формат подключения")
+        require(inbound.optInt("id") == id) { "Панель вернула другое подключение" }
+        return inbound
+    }
+    suspend fun updateClient(edit: dev.threex.mobile.domain.ClientEdit, draft: dev.threex.mobile.domain.ClientDraft, inbounds: List<JSONObject>) {
+        val fresh = clientForEdit(edit.email)
+        val changingAttachments = draft.inboundIds != edit.initial.inboundIds
+        require(!changingAttachments || fresh.initial.inboundIds == edit.initial.inboundIds) { "Привязки клиента изменились на сервере. Закройте редактор и откройте его снова." }
+        val body = edit.updateBody(draft, inbounds, fresh)
+        post("clients", "update", edit.email, body = body)
+        val email = body.getString("email")
+        if (changingAttachments) try {
+            val add = draft.inboundIds - fresh.initial.inboundIds
+            val remove = fresh.initial.inboundIds - draft.inboundIds
+            if (add.isNotEmpty()) post("clients", email, "attach", body = JSONObject().put("inboundIds", JSONArray(add.sorted())))
+            if (remove.isNotEmpty()) post("clients", email, "detach", body = JSONObject().put("inboundIds", JSONArray(remove.sorted())))
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { throw ClientPartiallySavedException() }
+    }
     suspend fun setClientEnabled(email: String, enabled: Boolean) = post("clients", if (enabled) "bulkEnable" else "bulkDisable", body = JSONObject().put("emails", JSONArray(listOf(email))))
     suspend fun setInboundEnabled(id: Int, enabled: Boolean) = post("inbounds", "setEnable", id.toString(), body = JSONObject().put("enable", enabled))
 }
+
+class ClientPartiallySavedException : IOException("Настройки клиента сохранены, но не все привязки применены. Обновите список и заново откройте клиента, чтобы проверить результат.")
 
 private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }
